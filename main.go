@@ -16,10 +16,21 @@ const bin = `/home/oracle/app/ggate/ggsci`
 var fdebug bool
 var aliases map[string]string
 
+// Структура для хранения MAP statement
+type repTable struct {
+	srcOwner  []byte
+	srcName   []byte
+	tOwner    []byte
+	tName     []byte
+	extParams []byte
+}
+
 type gGroup struct {
 	GroupName   string
 	GroupType   string
 	GroupStatus string
+	GroupDB     string
+	GroupMaps   map[string]repTable
 }
 
 var ggGroups []gGroup
@@ -72,9 +83,7 @@ func getGroupInfo() {
 				log.Println(ggGroup)
 			}
 		}
-
 	}
-
 }
 
 func getCredStoreInfo() {
