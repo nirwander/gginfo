@@ -15,7 +15,11 @@ import (
 )
 
 // const configFile = `grafana.json`
-const bin = `/u00/ggate18/ggsci`
+//const bin = `/u00/ggate18/ggsci`
+const bin = `/home/oracle/app/ggate`
+
+//const dbcred = `fe_gg/hw8mpv2vt@repdb`
+const dbcred = `ggate/ggate@orcl`
 
 // cmd flags
 var fdebug bool
@@ -57,7 +61,7 @@ func main() {
 
 	// processReplicatReport(`C:\Users\wander\go\xfecr.txt`)
 	// getConfig()
-	db, err := sql.Open("goracle" /*os.Args[1]*/, `fe_gg/hw8mpv2vt@repdb`)
+	db, err := sql.Open("goracle" /*os.Args[1]*/, dbcred)
 	if err != nil {
 		log.Println(err)
 		return
@@ -84,7 +88,7 @@ func main() {
 	}
 
 	var cnt int64
-	err = db.QueryRow("select count(*) from fe_gg.replicated_tables").Scan(&cnt)
+	err = db.QueryRow("select count(*) from replicated_tables").Scan(&cnt)
 	if err != nil {
 		fmt.Println(err)
 		return
