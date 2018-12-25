@@ -2,15 +2,20 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"flag"
 	"fmt"
 	"log"
 	"os/exec"
+	"regexp"
+	"strings"
 	"time"
+
+	_ "gopkg.in/goracle.v2"
 )
 
 // const configFile = `grafana.json`
-const bin = `/home/oracle/app/ggate/ggsci`
+const bin = `/u00/ggate18/ggsci`
 
 // cmd flags
 var fdebug bool
@@ -25,6 +30,7 @@ type repTable struct {
 	extParams []byte
 }
 
+// Структура для хранения информации о группах
 type gGroup struct {
 	GroupName   string
 	GroupType   string
@@ -51,10 +57,39 @@ func main() {
 
 	// processReplicatReport(`C:\Users\wander\go\xfecr.txt`)
 	// getConfig()
+	db, err := sql.Open("goracle" /*os.Args[1]*/, `fe_gg/hw8mpv2vt@repdb`)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer db.Close()
 
 	getCredStoreInfo()
 
 	getGroupInfo()
+
+	for i, grp := range ggGroups {
+		if fdebug {
+			log.Printf("Getting info for group %s\n", grp.GroupName)
+		}
+		if grp.GroupStatus == string("RUNNING") {
+			out := execCmd(bin, "view report "+grp.GroupName)
+			ggGroups[i].GroupMaps = processReplicatReport(out)
+
+		}
+	}
+
+	if fdebug {
+		fmt.Println(ggGroups)
+	}
+
+	var cnt int64
+	err = db.QueryRow("select count(*) from fe_gg.replicated_tables").Scan(&cnt)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Printf("Successful connection. Table records count: %v\n", cnt)
 
 	fmt.Printf("\n%s time spent\n", time.Since(start))
 }
@@ -80,7 +115,7 @@ func getGroupInfo() {
 			ggGroup.GroupName = string(props[2])
 			ggGroups = append(ggGroups, ggGroup)
 			if fdebug {
-				log.Println(ggGroup)
+				fmt.Println(ggGroup)
 			}
 		}
 	}
@@ -138,5 +173,43 @@ func execCmd(bin string, cmdText string) bytes.Buffer {
 	// }
 
 	// fmt.Printf("Output:\n%s\n", out.Bytes() )
+}
 
+func processReplicatReport(report bytes.Buffer) map[string]repTable {
+
+	lines := bytes.Split(report.Bytes(), []byte("\n"))
+	re := regexp.MustCompile(`(?i)map[[:space:]]+([[:alnum:]_$]+)\.([[:alnum:]_$\?\*\-]+)[[:space:]]*,{0,1}[[:space:]]*target[[:space:]]+([[:alnum:]_$]+)\.([[:alnum:]_$\?\*\-]+)[[:space:]]*,{0,1}[[:space:]]*(.*);`)
+
+	repTables := make(map[string]repTable)
+	var c2 int
+	var c3 int
+	for _, line := range lines {
+		// Ищем предложения MAP OWNER.NAME TARGET OWNER.NAME [params] ;
+		//fmt.Printf("%d: %s", i, line)
+		matches := re.FindSubmatch(line)
+		c2++
+		if len(matches) > 0 {
+			//fmt.Printf("%q\n", matches)
+			fmt.Printf("\t%s.%s >> %s.%s, tail: %s\n", matches[1], matches[2], matches[3], matches[4], matches[5])
+			repTables[strings.ToUpper(string(matches[3]))+"."+strings.ToUpper(string(matches[4]))] = repTable{matches[1], matches[2], matches[3], matches[4], matches[5]}
+			//str := string(matches[3]) + "." + string(matches[4])
+			//fmt.Printf("\t%s\n", str)
+			c3++
+		}
+
+		if bytes.Contains(line, []byte("Run Time Messages")) {
+			break
+		}
+	}
+
+	if fdebug {
+		fmt.Printf("%s exists\n", repTables["BIS.PHONE_HISTORIES"].srcOwner)
+		fmt.Printf("%s not exists\n", repTables["BIS.PHONE_HISTORIES2"].srcOwner)
+		if repTables["BIS.PHONE_HISTORIES2"].srcOwner == nil {
+			fmt.Println("not exists")
+		}
+		fmt.Printf("\n%d lines in file\n%d lines matched\n", c2, c3)
+		fmt.Printf("%d tables in map\n", len(repTables))
+	}
+	return repTables
 }
