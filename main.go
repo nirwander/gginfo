@@ -14,6 +14,21 @@ import (
 	_ "gopkg.in/goracle.v2"
 )
 
+/*
+ create table fe_gg.replicated_tables
+(
+group_name varchar2(20) not null,
+group_type varchar2(50) not null,
+src_table_owner varchar2(128) not null,
+src_table_name varchar2(128) not null,
+trg_table_owner varchar2(128) not null,
+trg_table_name varchar2(128) not null,
+ext_params varchar2(2000),
+insert_date date default on null sysdate not null
+)
+tablespace REP;
+*/
+
 // const configFile = `grafana.json`
 //const bin = `/u00/ggate18/ggsci`
 const bin = `/home/oracle/app/ggate`
