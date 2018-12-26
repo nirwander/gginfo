@@ -31,7 +31,7 @@ tablespace REP;
 
 // const configFile = `grafana.json`
 //const bin = `/u00/ggate18/ggsci`
-const bin = `/home/oracle/app/ggate`
+const bin = `/home/oracle/app/ggate/ggsci`
 
 //const dbcred = `fe_gg/hw8mpv2vt@repdb`
 const dbcred = `ggate/ggate@orcl`
