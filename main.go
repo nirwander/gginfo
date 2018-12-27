@@ -30,11 +30,13 @@ tablespace REP;
 */
 
 // const configFile = `grafana.json`
-//const bin = `/u00/ggate18/ggsci`
-const bin = `/home/oracle/app/ggate/ggsci`
+const bin = `/u00/ggate18/ggsci`
 
-//const dbcred = `fe_gg/hw8mpv2vt@repdb`
-const dbcred = `ggate/ggate@orcl`
+//const bin = `/home/oracle/app/ggate/ggsci`
+
+const dbcred = `fe_gg/hw8mpv2vt@repdb`
+
+//const dbcred = `ggate/ggate@orcl`
 
 // cmd flags
 var fdebug bool
@@ -98,9 +100,9 @@ func main() {
 		}
 	}
 
-	if fdebug {
-		fmt.Println(ggGroups)
-	}
+	// if fdebug {
+	// 	fmt.Println(ggGroups)
+	// }
 
 	var cnt int64
 	err = db.QueryRow("select count(*) from replicated_tables").Scan(&cnt)
@@ -222,11 +224,11 @@ func processReplicatReport(report bytes.Buffer) map[string]repTable {
 	}
 
 	if fdebug {
-		fmt.Printf("%s exists\n", repTables["BIS.PHONE_HISTORIES"].srcOwner)
-		fmt.Printf("%s not exists\n", repTables["BIS.PHONE_HISTORIES2"].srcOwner)
-		if repTables["BIS.PHONE_HISTORIES2"].srcOwner == nil {
-			fmt.Println("not exists")
-		}
+		// fmt.Printf("%s exists\n", repTables["BIS.PHONE_HISTORIES"].srcOwner)
+		// fmt.Printf("%s not exists\n", repTables["BIS.PHONE_HISTORIES2"].srcOwner)
+		// if repTables["BIS.PHONE_HISTORIES2"].srcOwner == nil {
+		// 	fmt.Println("not exists")
+		// }
 		fmt.Printf("\n%d lines in file\n%d lines matched\n", c2, c3)
 		fmt.Printf("%d tables in map\n", len(repTables))
 	}
