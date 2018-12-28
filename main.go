@@ -95,7 +95,9 @@ func main() {
 		}
 		if grp.GroupStatus == string("RUNNING") {
 			out := execCmd(bin, "view report "+grp.GroupName)
-			ggGroups[i].GroupMaps = processReplicatReport(out)
+			if grp.GroupType == string("REPLICAT") {
+				ggGroups[i].GroupMaps = processReplicatReport(out)
+			}
 
 		}
 	}
@@ -107,8 +109,7 @@ func main() {
 	var cnt int64
 	err = db.QueryRow("select count(*) from replicated_tables").Scan(&cnt)
 	if err != nil {
-		fmt.Println(err)
-		return
+		log.Fatal(err)
 	}
 	fmt.Printf("Successful connection. Table records count: %v\n", cnt)
 
