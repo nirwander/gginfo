@@ -84,6 +84,9 @@ func main() {
 		return
 	}
 	defer db.Close()
+	if fdebug {
+		log.Println("Successful DB connection")
+	}
 
 	getCredStoreInfo()
 
@@ -111,7 +114,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("Successful connection. Table records count: %v\n", cnt)
+	fmt.Printf("Table records count: %v\n", cnt)
 
 	fmt.Printf("\n%s time spent\n", time.Since(start))
 }
