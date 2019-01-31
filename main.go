@@ -65,7 +65,7 @@ var ggGroups []gGroup
 func init() {
 	const (
 		defaultDebug = false
-		debugUsage   = "set debug=true to get output data in StdOut instead of sending to DB"
+		debugUsage   = "set debug=true to get output data in StdOut (and additional info) instead of sending to DB"
 	)
 	flag.BoolVar(&fdebug, "debug", defaultDebug, debugUsage)
 }
