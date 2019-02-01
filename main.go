@@ -30,6 +30,7 @@ tablespace REP;
 */
 
 // const configFile = `grafana.json`
+
 const bin = `/u00/ggate18/ggsci`
 
 //const bin = `/home/oracle/app/ggate/ggsci`
@@ -78,7 +79,7 @@ func main() {
 
 	// processReplicatReport(`C:\Users\wander\go\xfecr.txt`)
 	// getConfig()
-	db, err := sql.Open("goracle" /*os.Args[1]*/, dbcred)
+	db, err := sql.Open("goracle", dbcred)
 	if err != nil {
 		log.Println(err)
 		return
@@ -101,6 +102,14 @@ func main() {
 			if grp.GroupType == string("REPLICAT") {
 				ggGroups[i].GroupMaps = processReplicatReport(out)
 			}
+
+			list_cnt := len(ggGroups[i].GroupMaps)
+			gn := make([]string)
+
+			tx, err := db.Begin()
+			stmt, err := tx.Prepare("insert into fe_gg.tmp_replicated_tables values (:gn, :gt, :sto, :stn, :tto, :ttn, :par)")
+
+			affectedRows, err := stmt.Exec(gn, gt, sto, stn, tto, ttn, par)
 
 		}
 	}
