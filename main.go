@@ -8,6 +8,7 @@ import (
 	"log"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,7 +16,7 @@ import (
 )
 
 /*
- create table fe_gg.replicated_tables
+create table replicated_tables
 (
 group_name varchar2(20) not null,
 group_type varchar2(50) not null,
@@ -27,21 +28,32 @@ ext_params varchar2(2000),
 insert_date date default on null sysdate not null
 )
 tablespace REP;
+
+create global temporary table tmp_replicated_tables
+(
+group_name varchar2(20) not null,
+group_type varchar2(50) not null,
+src_table_owner varchar2(128) not null,
+src_table_name varchar2(128) not null,
+trg_table_owner varchar2(128) not null,
+trg_table_name varchar2(128) not null,
+ext_params varchar2(2000)
+)
+on commit preserve rows;
 */
 
 // const configFile = `grafana.json`
 
-const bin = `/u00/ggate18/ggsci`
+// const ggsciBinary = `/u00/ggate18/ggsci`
 
-//const bin = `/home/oracle/app/ggate/ggsci`
-
-const dbcred = `fe_gg/hw8mpv2vt@repdb`
-
-//const dbcred = `ggate/ggate@orcl`
+//const ggsciBinary = `/home/oracle/app/ggate/ggsci`
 
 // cmd flags
 var fdebug bool
+var ggsciBinary string
+
 var aliases map[string]string
+var dbConns map[string]*sql.DB
 
 // Структура для хранения MAP statement
 type repTable struct {
@@ -67,8 +79,11 @@ func init() {
 	const (
 		defaultDebug = false
 		debugUsage   = "set debug=true to get output data in StdOut (and additional info) instead of sending to DB"
+		defaultGgsci = "ggsci"
+		ggsciUsage   = "set full path to ggsci binary"
 	)
 	flag.BoolVar(&fdebug, "debug", defaultDebug, debugUsage)
+	flag.StringVar(&ggsciBinary, "ggsci", defaultGgsci, ggsciUsage)
 }
 
 func main() {
@@ -77,63 +92,73 @@ func main() {
 	//Разворачиваем аргументы
 	flag.Parse()
 
-	// processReplicatReport(`C:\Users\wander\go\xfecr.txt`)
+	// processReport(`C:\Users\wander\go\xfecr.txt`)
 	// getConfig()
-	db, err := sql.Open("goracle", dbcred)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	defer db.Close()
-	if fdebug {
-		log.Println("Successful DB connection")
-	}
+	dbConns = make(map[string]*sql.DB)
+	// db, err := sql.Open("goracle", "fe_gg/hw8mpv2vt@repdb")
+	// if err != nil {
+	// 	log.Fatalln(err)
+	// }
+	// dbConns["REPDB_GG"] = db
+
+	// db, err = sql.Open("goracle", "ggate/***@uat")
+	// if err != nil {
+	// 	log.Fatalln(err)
+	// }
+	// dbConns["UAT"] = db
+
+	// db, err = sql.Open("goracle", "ggate/***@dev")
+	// if err != nil {
+	// 	log.Fatalln(err)
+
+	// }
+	// dbConns["DEV"] = db
+
+	// db, err := sql.Open("goracle", dbcred)
+	// if err != nil {
+	// 	log.Println(err)
+	// 	return
+	// }
 
 	getCredStoreInfo()
 
 	getGroupInfo()
 
 	for i, grp := range ggGroups {
-		if fdebug {
-			log.Printf("Getting info for group %s\n", grp.GroupName)
-		}
+		log.Printf("Getting info for group %s\n", grp.GroupName)
 		if grp.GroupStatus == string("RUNNING") {
-			out := execCmd(bin, "view report "+grp.GroupName)
+			out := execCmd(ggsciBinary, "view report "+grp.GroupName)
 			if grp.GroupType == string("REPLICAT") {
-				ggGroups[i].GroupMaps = processReplicatReport(out)
+				ggGroups[i].GroupMaps, ggGroups[i].GroupDB = processReport(out)
+
+				if ggGroups[i].GroupDB == "" {
+					continue // Пропускаем этап вставки в БД, если БД для группы не указана
+				}
+				updateDB(ggGroups[i])
 			}
-
-			list_cnt := len(ggGroups[i].GroupMaps)
-			gn := make([]string)
-
-			tx, err := db.Begin()
-			stmt, err := tx.Prepare("insert into fe_gg.tmp_replicated_tables values (:gn, :gt, :sto, :stn, :tto, :ttn, :par)")
-
-			affectedRows, err := stmt.Exec(gn, gt, sto, stn, tto, ttn, par)
-
 		}
 	}
 
-	// if fdebug {
-	// 	fmt.Println(ggGroups)
-	// }
+	defer func() {
+		for _, cn := range dbConns {
+			cn.Close()
+		}
+	}()
 
-	var cnt int64
-	err = db.QueryRow("select count(*) from replicated_tables").Scan(&cnt)
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("Table records count: %v\n", cnt)
+	// var cnt int64
+	// err := db.QueryRow("select count(*) from replicated_tables").Scan(&cnt)
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
+	// fmt.Printf("Table records count: %v\n", cnt)
 
 	fmt.Printf("\n%s time spent\n", time.Since(start))
 }
 
 func getGroupInfo() {
-	if fdebug {
-		log.Println("Getting all groups info")
-	}
+	log.Println("Getting all groups info")
 
-	out := execCmd(bin, "info all")
+	out := execCmd(ggsciBinary, "info all")
 	if fdebug {
 		log.Printf("Got %d bytes\n", out.Len())
 	}
@@ -148,19 +173,17 @@ func getGroupInfo() {
 			ggGroup.GroupStatus = string(props[1])
 			ggGroup.GroupName = string(props[2])
 			ggGroups = append(ggGroups, ggGroup)
-			if fdebug {
-				fmt.Println(ggGroup)
-			}
+			//if fdebug {
+			//	fmt.Println(ggGroup)
+			//}
 		}
 	}
 }
 
 func getCredStoreInfo() {
-	if fdebug {
-		log.Println("Getting credential store info")
-	}
+	log.Println("Getting credential store info")
 
-	out := execCmd(bin, "info credentialstore")
+	out := execCmd(ggsciBinary, "info credentialstore")
 	if fdebug {
 		log.Printf("Got %d bytes\n", out.Len())
 	}
@@ -172,11 +195,11 @@ func getCredStoreInfo() {
 	for _, line := range lines {
 		// fmt.Printf("%s\n", line)
 		if bytes.Contains(line, []byte("Alias:")) {
-			currAlias = string(bytes.TrimLeft(bytes.TrimSpace(line), string("Alias: ")))
+			currAlias = strings.ToUpper(string(bytes.TrimLeft(bytes.TrimSpace(line), string("Alias: "))))
 			continue
 		}
 		if currAlias != "" {
-			aliases[currAlias] = string(bytes.TrimLeft(bytes.TrimSpace(line), string("Userid: ")))
+			aliases[currAlias] = strings.ToUpper(string(bytes.TrimLeft(bytes.TrimSpace(line), string("Userid: "))))
 			currAlias = ""
 		}
 	}
@@ -185,10 +208,10 @@ func getCredStoreInfo() {
 	}
 }
 
-func execCmd(bin string, cmdText string) bytes.Buffer {
+func execCmd(ggsciBinary string, cmdText string) bytes.Buffer {
 	var out bytes.Buffer
 
-	cmd := exec.Command(bin)
+	cmd := exec.Command(ggsciBinary)
 	// cmd.Stdin = bytes.NewBuffer([]byte("info all"))
 	cmd.Stdin = bytes.NewBuffer([]byte(cmdText))
 	cmd.Stdout = &out
@@ -209,26 +232,50 @@ func execCmd(bin string, cmdText string) bytes.Buffer {
 	// fmt.Printf("Output:\n%s\n", out.Bytes() )
 }
 
-func processReplicatReport(report bytes.Buffer) map[string]repTable {
+func processReport(report bytes.Buffer) (map[string]repTable, string) {
 
 	lines := bytes.Split(report.Bytes(), []byte("\n"))
-	re := regexp.MustCompile(`(?i)map[[:space:]]+([[:alnum:]_$]+)\.([[:alnum:]_$\?\*\-]+)[[:space:]]*,{0,1}[[:space:]]*target[[:space:]]+([[:alnum:]_$]+)\.([[:alnum:]_$\?\*\-]+)[[:space:]]*,{0,1}[[:space:]]*(.*);`)
+	re := regexp.MustCompile(`(?i)map[[:space:]]+([[:alnum:]_$]+)\.([[:alnum:]_$\?\*\-]+)[[:space:]]*,{0,1}[[:space:]]*target[[:space:]]+([[:alnum:]_$]+)\.([[:alnum:]_$\?\*\-]+)[[:space:]]*,{0,1}[[:space:]]*([^;]*)`)
 
 	repTables := make(map[string]repTable)
-	var c2 int
-	var c3 int
+	var groupDB string
+	var linesFile int
+	var linesMatched int
 	for _, line := range lines {
 		// Ищем предложения MAP OWNER.NAME TARGET OWNER.NAME [params] ;
-		//fmt.Printf("%d: %s", i, line)
+		// fmt.Printf("%d: %s", i, line)
 		matches := re.FindSubmatch(line)
-		c2++
+		linesFile++
 		if len(matches) > 0 {
-			//fmt.Printf("%q\n", matches)
-			fmt.Printf("\t%s.%s >> %s.%s, tail: %s\n", matches[1], matches[2], matches[3], matches[4], matches[5])
+			// fmt.Printf("%q\n", matches)
+			if fdebug {
+				fmt.Printf("\t%s.%s >> %s.%s, tail: %s\n", matches[1], matches[2], matches[3], matches[4], matches[5])
+			}
 			repTables[strings.ToUpper(string(matches[3]))+"."+strings.ToUpper(string(matches[4]))] = repTable{matches[1], matches[2], matches[3], matches[4], matches[5]}
-			//str := string(matches[3]) + "." + string(matches[4])
-			//fmt.Printf("\t%s\n", str)
-			c3++
+			// str := string(matches[3]) + "." + string(matches[4])
+			// fmt.Printf("\t%s\n", str)
+			linesMatched++
+		}
+
+		// Получаем tns базы данных, с которой работает процесс
+		if bytes.Contains(bytes.ToUpper(line), []byte("USERID")) {
+			authLine := bytes.ToUpper(line)
+			if bytes.Contains(authLine, []byte("USERIDALIAS")) {
+				alias := string(bytes.TrimSpace(bytes.TrimLeft(bytes.TrimSpace(authLine), string("USERIDALIAS"))))
+				dbconn, ok := aliases[alias]
+				if !ok {
+					log.Fatalln("Unable to find record for " + alias + " in credential store map")
+				}
+				groupDB = strings.Split(dbconn, string("@"))[1]
+			} else { // USERID type of auth
+
+				useridRE := regexp.MustCompile(`(?i)USERID.+@([[:alnum:]_$]+).+`)
+				matches = useridRE.FindSubmatch(authLine)
+				groupDB = string(matches[1])
+			}
+			if fdebug {
+				log.Printf("Group DB is %s", groupDB)
+			}
 		}
 
 		if bytes.Contains(line, []byte("Run Time Messages")) {
@@ -242,8 +289,149 @@ func processReplicatReport(report bytes.Buffer) map[string]repTable {
 		// if repTables["BIS.PHONE_HISTORIES2"].srcOwner == nil {
 		// 	fmt.Println("not exists")
 		// }
-		fmt.Printf("\n%d lines in file\n%d lines matched\n", c2, c3)
-		fmt.Printf("%d tables in map\n", len(repTables))
+		fmt.Printf("\n%d lines in file\n%d lines matched\n", linesFile, linesMatched)
+
 	}
-	return repTables
+	log.Printf("%d tables in map\n", len(repTables))
+	return repTables, groupDB
+}
+
+func updateDB(group gGroup) {
+	_, ok := dbConns[group.GroupDB]
+	if !ok {
+		var dbcred string
+		switch group.GroupDB {
+		case "REPDB_GG":
+			dbcred = "fe_gg/**@repdb"
+		case "STATDB":
+			dbcred = "ggate/**@statdb"
+		case "UAT":
+			dbcred = "ggate/**@uat"
+		case "DEV":
+			dbcred = "ggate/**@dev"
+		case "GG_STF":
+			dbcred = "ggate/**@dwx"
+		case "GG_KV":
+			dbcred = "ggate/**@dwx"
+		case "GG_FE":
+			dbcred = "ggate/**@dwx"
+		case "GG_NW":
+			dbcred = "ggate/**@dwx"
+		case "GG_GFM":
+			dbcred = "ggate/**@dwx"
+		case "GG_SF":
+			dbcred = "ggate/**@dwx"
+		case "GG_PF":
+			dbcred = "ggate/**@dwx"
+		case "GG_UR":
+			dbcred = "ggate/**@dwx"
+		default:
+			log.Fatalln("No credentials for group DB specified: " + group.GroupDB)
+		}
+
+		db, err := sql.Open("goracle", dbcred)
+		if err != nil {
+			log.Fatalln(err)
+		}
+		dbConns[group.GroupDB] = db
+		if fdebug {
+			log.Println("Successful DB connection")
+		}
+	}
+
+	tx, err := dbConns[group.GroupDB].Begin() //db.Begin()
+	if err != nil {
+		log.Println("Error starting DB transaction: " + err.Error())
+	}
+	stmt, err := tx.Prepare("insert into tmp_replicated_tables values (:gn, :gt, :sto, :stn, :tto, :ttn, :par)")
+	if err != nil {
+		log.Println("Error preparing statement for GG group " + group.GroupName + ": " + err.Error())
+	}
+
+	// _, err = tx.Exec("truncate table tmp_replicated_tables")
+	// if err != nil {
+	// 	log.Println("Error executing 'truncate table tmp_replicated_tables'")
+	// }
+	var tmpRowsCnt int64
+	for _, val := range group.GroupMaps {
+		res, err := stmt.Exec(group.GroupName, group.GroupType, strings.ToUpper(string(val.srcOwner)), strings.ToUpper(string(val.srcName)), strings.ToUpper(string(val.tOwner)), strings.ToUpper(string(val.tName)), string(val.extParams)[:min(4000, len(val.extParams))])
+		if err != nil {
+			log.Println("Error inserting row in tmp_replicated_tables: " + err.Error())
+		}
+		rowsCnt, err := res.RowsAffected()
+		if err != nil {
+			log.Println("Error getting affected rows: " + err.Error())
+		}
+		tmpRowsCnt += rowsCnt
+	}
+	if fdebug {
+		log.Println("Inserted " + strconv.FormatInt(tmpRowsCnt, 10) + " rows into tmp_replicated_tables")
+	}
+	err = stmt.Close()
+	if err != nil {
+		log.Println("Error closing statement: " + err.Error())
+	}
+	stmt, err = tx.Prepare(`insert into replicated_tables 
+	select group_name, group_type, src_table_owner, src_table_name, trg_table_owner, trg_table_name, ext_params, sysdate as ins_date
+	from tmp_replicated_tables t
+	where not exists (select * from replicated_tables r where r.group_name = t.group_name 
+																	and r.src_table_owner = t.src_table_owner 
+																	and r.src_table_name = t.src_table_name 
+																	and r.trg_table_owner = t.trg_table_owner 
+																	and r.trg_table_name = t.trg_table_name )
+	and exists (select * from dba_tables dt where dt.owner = t.trg_table_owner and dt.table_name = t.trg_table_name)`)
+
+	res, err := stmt.Exec()
+	if err != nil {
+		log.Println("Error inserting row in replicated_tables: " + err.Error())
+	}
+	rowsCnt, err := res.RowsAffected()
+	if err != nil {
+		log.Println("Error getting affected rows:" + err.Error())
+	}
+	log.Println("Inserted " + strconv.FormatInt(rowsCnt, 10) + " rows into replicated_tables")
+	err = stmt.Close()
+	if err != nil {
+		log.Println("Error closing statement: " + err.Error())
+	}
+
+	stmt, err = tx.Prepare(`delete from replicated_tables t
+	where (not exists (select * from tmp_replicated_tables r where r.group_name = t.group_name 
+																		and r.src_table_owner = t.src_table_owner 
+																		and r.src_table_name = t.src_table_name 
+																		and r.trg_table_owner = t.trg_table_owner 
+																		and r.trg_table_name = t.trg_table_name )
+	or not exists (select * from dba_tables dt where dt.owner = t.trg_table_owner and dt.table_name = t.trg_table_name))
+	and t.group_name=:gn`)
+
+	res, err = stmt.Exec(group.GroupName)
+	if err != nil {
+		log.Println("Error deleting row from replicated_tables: " + err.Error())
+	}
+	rowsCnt, err = res.RowsAffected()
+	if err != nil {
+		log.Println("Error getting affected rows: " + err.Error())
+	}
+	log.Println("Deleted " + strconv.FormatInt(rowsCnt, 10) + " rows from replicated_tables")
+	err = stmt.Close()
+	if err != nil {
+		log.Println("Error closing statement: " + err.Error())
+	}
+
+	_, err = tx.Exec("truncate table tmp_replicated_tables")
+	if err != nil {
+		log.Println("Error truncating tmp_replicated_tables: " + err.Error())
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		log.Println("Error commiting transaction: " + err.Error())
+	}
+}
+
+func min(x, y int) int {
+	if x < y {
+		return x
+	}
+	return y
 }
