@@ -44,10 +44,6 @@ on commit preserve rows;
 
 // const configFile = `grafana.json`
 
-// const ggsciBinary = `/u00/ggate18/ggsci`
-
-//const ggsciBinary = `/home/oracle/app/ggate/ggsci`
-
 // cmd flags
 var fdebug bool
 var ggsciBinary string
@@ -95,30 +91,6 @@ func main() {
 	// processReport(`C:\Users\wander\go\xfecr.txt`)
 	// getConfig()
 	dbConns = make(map[string]*sql.DB)
-	// db, err := sql.Open("goracle", "fe_gg/hw8mpv2vt@repdb")
-	// if err != nil {
-	// 	log.Fatalln(err)
-	// }
-	// dbConns["REPDB_GG"] = db
-
-	// db, err = sql.Open("goracle", "ggate/***@uat")
-	// if err != nil {
-	// 	log.Fatalln(err)
-	// }
-	// dbConns["UAT"] = db
-
-	// db, err = sql.Open("goracle", "ggate/***@dev")
-	// if err != nil {
-	// 	log.Fatalln(err)
-
-	// }
-	// dbConns["DEV"] = db
-
-	// db, err := sql.Open("goracle", dbcred)
-	// if err != nil {
-	// 	log.Println(err)
-	// 	return
-	// }
 
 	getCredStoreInfo()
 
@@ -131,7 +103,7 @@ func main() {
 			if grp.GroupType == string("REPLICAT") {
 				ggGroups[i].GroupMaps, ggGroups[i].GroupDB = processReport(out)
 
-				if ggGroups[i].GroupDB == "" {
+				if ggGroups[i].GroupDB == "" || len(ggGroups[i].GroupMaps) == 0 /* защита от пустого отчета, когда иногда в отчет не попадают MAP директивы */ {
 					continue // Пропускаем этап вставки в БД, если БД для группы не указана
 				}
 				updateDB(ggGroups[i])
@@ -173,9 +145,6 @@ func getGroupInfo() {
 			ggGroup.GroupStatus = string(props[1])
 			ggGroup.GroupName = string(props[2])
 			ggGroups = append(ggGroups, ggGroup)
-			//if fdebug {
-			//	fmt.Println(ggGroup)
-			//}
 		}
 	}
 }
@@ -235,14 +204,14 @@ func execCmd(ggsciBinary string, cmdText string) bytes.Buffer {
 func processReport(report bytes.Buffer) (map[string]repTable, string) {
 
 	lines := bytes.Split(report.Bytes(), []byte("\n"))
-	re := regexp.MustCompile(`(?i)map[[:space:]]+([[:alnum:]_$]+)\.([[:alnum:]_$\?\*\-]+)[[:space:]]*,{0,1}[[:space:]]*target[[:space:]]+([[:alnum:]_$]+)\.([[:alnum:]_$\?\*\-]+)[[:space:]]*,{0,1}[[:space:]]*([^;]*)`)
+	re := regexp.MustCompile(`(?i)^map[[:space:]]+([[:alnum:]_$]+)\.([[:alnum:]_$\?\*\-]+)[[:space:]]*,{0,1}[[:space:]]*target[[:space:]]+([[:alnum:]_$]+)\.([[:alnum:]_$\?\*\-]+)[[:space:]]*,{0,1}[[:space:]]*([^;]*)`)
 
 	repTables := make(map[string]repTable)
 	var groupDB string
 	var linesFile int
 	var linesMatched int
 	for _, line := range lines {
-		// Ищем предложения MAP OWNER.NAME TARGET OWNER.NAME [params] ;
+		// Ищем предложения MAP OWNER.NAME TARGET OWNER.NAME [params];
 		// fmt.Printf("%d: %s", i, line)
 		matches := re.FindSubmatch(line)
 		linesFile++
@@ -264,7 +233,7 @@ func processReport(report bytes.Buffer) (map[string]repTable, string) {
 				alias := string(bytes.TrimSpace(bytes.TrimLeft(bytes.TrimSpace(authLine), string("USERIDALIAS"))))
 				dbconn, ok := aliases[alias]
 				if !ok {
-					log.Fatalln("Unable to find record for " + alias + " in credential store map")
+					log.Fatalln("Unable to find record for " + alias + " in credentialstore map")
 				}
 				groupDB = strings.Split(dbconn, string("@"))[1]
 			} else { // USERID type of auth
@@ -284,13 +253,7 @@ func processReport(report bytes.Buffer) (map[string]repTable, string) {
 	}
 
 	if fdebug {
-		// fmt.Printf("%s exists\n", repTables["BIS.PHONE_HISTORIES"].srcOwner)
-		// fmt.Printf("%s not exists\n", repTables["BIS.PHONE_HISTORIES2"].srcOwner)
-		// if repTables["BIS.PHONE_HISTORIES2"].srcOwner == nil {
-		// 	fmt.Println("not exists")
-		// }
 		fmt.Printf("\n%d lines in file\n%d lines matched\n", linesFile, linesMatched)
-
 	}
 	log.Printf("%d tables in map\n", len(repTables))
 	return repTables, groupDB
@@ -348,10 +311,6 @@ func updateDB(group gGroup) {
 		log.Println("Error preparing statement for GG group " + group.GroupName + ": " + err.Error())
 	}
 
-	// _, err = tx.Exec("truncate table tmp_replicated_tables")
-	// if err != nil {
-	// 	log.Println("Error executing 'truncate table tmp_replicated_tables'")
-	// }
 	var tmpRowsCnt int64
 	for _, val := range group.GroupMaps {
 		res, err := stmt.Exec(group.GroupName, group.GroupType, strings.ToUpper(string(val.srcOwner)), strings.ToUpper(string(val.srcName)), strings.ToUpper(string(val.tOwner)), strings.ToUpper(string(val.tName)), string(val.extParams)[:min(4000, len(val.extParams))])
@@ -389,7 +348,7 @@ func updateDB(group gGroup) {
 	if err != nil {
 		log.Println("Error getting affected rows:" + err.Error())
 	}
-	log.Println("Inserted " + strconv.FormatInt(rowsCnt, 10) + " rows into replicated_tables")
+	log.Println("   Inserted " + strconv.FormatInt(rowsCnt, 10) + " rows into replicated_tables")
 	err = stmt.Close()
 	if err != nil {
 		log.Println("Error closing statement: " + err.Error())
@@ -412,7 +371,7 @@ func updateDB(group gGroup) {
 	if err != nil {
 		log.Println("Error getting affected rows: " + err.Error())
 	}
-	log.Println("Deleted " + strconv.FormatInt(rowsCnt, 10) + " rows from replicated_tables")
+	log.Println("   Deleted " + strconv.FormatInt(rowsCnt, 10) + " rows from replicated_tables")
 	err = stmt.Close()
 	if err != nil {
 		log.Println("Error closing statement: " + err.Error())
