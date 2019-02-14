@@ -3,10 +3,14 @@ package main
 import (
 	"bytes"
 	"database/sql"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -42,7 +46,7 @@ ext_params varchar2(2000)
 on commit preserve rows;
 */
 
-// const configFile = `grafana.json`
+const configGroups = `groups.json`
 
 // cmd flags
 var fdebug bool
@@ -62,11 +66,12 @@ type repTable struct {
 
 // Структура для хранения информации о группах
 type gGroup struct {
-	GroupName   string
-	GroupType   string
-	GroupStatus string
-	GroupDB     string
-	GroupMaps   map[string]repTable
+	GroupName      string
+	GroupType      string
+	GroupStatus    string
+	GroupLastStart string
+	GroupDB        string
+	GroupMaps      map[string]repTable
 }
 
 var ggGroups []gGroup
@@ -94,10 +99,15 @@ func main() {
 
 	getCredStoreInfo()
 
-	getGroupInfo()
+	getGroupsInfo()
+
+	loadGroupsLastStatus()
 
 	for i, grp := range ggGroups {
 		log.Printf("Getting info for group %s\n", grp.GroupName)
+
+		ggGroups[i].GroupLastStart = getSingleGroupInfo(grp.GroupName)
+
 		if grp.GroupStatus == string("RUNNING") {
 			out := execCmd(ggsciBinary, "view report "+grp.GroupName)
 			if grp.GroupType == string("REPLICAT") {
@@ -127,7 +137,27 @@ func main() {
 	fmt.Printf("\n%s time spent\n", time.Since(start))
 }
 
-func getGroupInfo() {
+func loadGroupsLastStatus() {
+	ex, err := os.Executable()
+	if err != nil {
+		panic(err)
+	}
+	exPath := filepath.Dir(ex)
+
+	fileBytes, err := ioutil.ReadFile(exPath + "/" + configGroups)
+	if err != nil {
+		log.Fatal("Error reading config file - expecting", exPath+"/"+configGroups, err)
+	}
+
+	err = json.Unmarshal(fileBytes, &Config)
+	if err != nil {
+		log.Fatal("Error parsing config", err)
+	}
+
+	//fmt.Println(Config)
+}
+
+func getGroupsInfo() {
 	log.Println("Getting all groups info")
 
 	out := execCmd(ggsciBinary, "info all")
@@ -147,6 +177,33 @@ func getGroupInfo() {
 			ggGroups = append(ggGroups, ggGroup)
 		}
 	}
+}
+
+func loadGroupsLastStatus() {
+
+}
+
+func getSingleGroupInfo(gname string) string {
+	if fdebug {
+		log.Println("Get simple info for group " + gname)
+	}
+
+	out := execCmd(ggsciBinary, "info "+gname)
+	if fdebug {
+		log.Printf("Got %d bytes\n", out.Len())
+	}
+	lines := bytes.Split(out.Bytes(), []byte("\n"))
+	var startDate string
+	for _, line := range lines {
+		// Last Started 2019-01-01 00:00
+		if pos := bytes.LastIndex(line, []byte("Last Started")); pos != -1 {
+			startDate = line[pos+13 : pos+13+16]
+		}
+	}
+	if fdebug {
+		log.Println("Group " + gname + " last start: " + startDate)
+	}
+	return startDate
 }
 
 func getCredStoreInfo() {
