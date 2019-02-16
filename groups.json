@@ -1,1 +1,10 @@
-[]
+[
+    {
+    "ggsci":"/ggsci",
+    "groups":[{"groupName":"REP","lastStart":"2011-01-01 16:50","lastStatus":"RUNNING"},{"groupName":"REPA","lastStart":"2011-01-01 16:51","lastStatus":"RUNNING"}]
+    },
+    {
+    "ggsci":"/opt/ggsci",
+    "groups":[{"groupName":"REP","lastStart":"2011-01-01 16:50","lastStatus":"RUNNING"},{"groupName":"REPA","lastStart":"2011-01-01 16:51","lastStatus":"RUNNING"}]
+    }
+    ]

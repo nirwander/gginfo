@@ -76,13 +76,19 @@ type gGroup struct {
 
 var ggGroups []gGroup
 
-type ggGroupsLastStatus []struct {
-	Ggsci  string `json:"ggsci"`
-	Groups []struct {
-		GroupName string `json:"groupName"`
-		LastStart string `json:"lastStart"`
-	} `json:"groups"`
+// Структуры для хранения статуса и даты крайнего запуска группы
+type groupLastStartAndStatus struct {
+	GroupName  string `json:"groupName"`
+	LastStart  string `json:"lastStart"`
+	LastStatus string `json:"lastStatus"`
 }
+
+type ggGroupsLastStatus struct {
+	Ggsci  string                    `json:"ggsci"`
+	Groups []groupLastStartAndStatus `json:"groups"`
+}
+
+var groupsLastStatus []ggGroupsLastStatus
 
 func init() {
 	const (
@@ -105,18 +111,20 @@ func main() {
 	// getConfig()
 	dbConns = make(map[string]*sql.DB)
 
+	loadGroupsLastStatus()
+
 	getCredStoreInfo()
 
 	getGroupsInfo()
-
-	loadGroupsLastStatus()
 
 	for i, grp := range ggGroups {
 		log.Printf("Getting info for group %s\n", grp.GroupName)
 
 		ggGroups[i].GroupLastStart = getSingleGroupInfo(grp.GroupName)
 
-		if grp.GroupStatus == string("RUNNING") {
+		prevLastStart, prevStatus := getLastGroupInfo(grp.GroupName)
+
+		if grp.GroupStatus == string("RUNNING") && (prevLastStart != ggGroups[i].GroupLastStart || prevStatus != grp.GroupStatus) {
 			out := execCmd(ggsciBinary, "view report "+grp.GroupName)
 			if grp.GroupType == string("REPLICAT") {
 				ggGroups[i].GroupMaps, ggGroups[i].GroupDB = processReport(out)
@@ -141,6 +149,7 @@ func main() {
 	// 	log.Fatal(err)
 	// }
 	// fmt.Printf("Table records count: %v\n", cnt)
+	saveGroupsLastStatus()
 
 	fmt.Printf("\n%s time spent\n", time.Since(start))
 }
@@ -157,12 +166,70 @@ func loadGroupsLastStatus() {
 		log.Fatal("Error reading config file - expecting", exPath+"/"+configGroups, err)
 	}
 
-	err = json.Unmarshal(fileBytes, &Config)
+	err = json.Unmarshal(fileBytes, &groupsLastStatus)
 	if err != nil {
 		log.Fatal("Error parsing config", err)
 	}
+	if fdebug {
+		log.Println("Loaded Last Status data from " + configGroups)
+		fmt.Println(groupsLastStatus)
+	}
+}
 
-	//fmt.Println(Config)
+//prevLastStart, prevStatus := getAndUpdateLastGroupInfo(ggsciBinary, grp.GroupName, ggGroups[i].GroupLastStart, grp.GroupStatus)
+func getLastGroupInfo(grName string) (string, string) {
+	var prevStart, prevStatus string
+	for _, grs := range groupsLastStatus {
+		if grs.Ggsci == ggsciBinary {
+			for _, g := range grs.Groups {
+				if g.GroupName == grName {
+					prevStart = g.LastStart
+					prevStatus = g.LastStatus
+					break
+				}
+			}
+			break
+		}
+	}
+	return prevStart, prevStatus
+}
+
+func saveGroupsLastStatus() {
+	var grCurrSt []groupLastStartAndStatus
+	for i := range ggGroups {
+		grCurrSt = append(grCurrSt, groupLastStartAndStatus{ggGroups[i].GroupName, ggGroups[i].GroupLastStart, ggGroups[i].GroupStatus})
+	}
+
+	// Для текущего рабочего бинарника заменяем старые статусы на текущие полностью
+	isSet := false
+	for i, ls := range groupsLastStatus {
+		if ls.Ggsci == ggsciBinary {
+			groupsLastStatus[i].Groups = grCurrSt
+			isSet = true
+			break
+		}
+	}
+	if !isSet {
+		groupsLastStatus = append(groupsLastStatus, ggGroupsLastStatus{ggsciBinary, grCurrSt})
+	}
+
+	ex, err := os.Executable()
+	if err != nil {
+		panic(err)
+	}
+	exPath := filepath.Dir(ex)
+
+	json, err := json.Marshal(&groupsLastStatus)
+	if err != nil {
+		log.Fatal("Error making json ", err)
+	}
+	err = ioutil.WriteFile(exPath+"/"+configGroups, json, 0644)
+	if err != nil {
+		log.Fatal("Error writing json ", err)
+	}
+	if fdebug {
+		log.Println("Written Last Status data to " + configGroups)
+	}
 }
 
 func getGroupsInfo() {
@@ -187,10 +254,6 @@ func getGroupsInfo() {
 	}
 }
 
-func loadGroupsLastStatus() {
-
-}
-
 func getSingleGroupInfo(gname string) string {
 	if fdebug {
 		log.Println("Get simple info for group " + gname)
@@ -205,7 +268,7 @@ func getSingleGroupInfo(gname string) string {
 	for _, line := range lines {
 		// Last Started 2019-01-01 00:00
 		if pos := bytes.LastIndex(line, []byte("Last Started")); pos != -1 {
-			startDate = line[pos+13 : pos+13+16]
+			startDate = string(line[pos+13 : pos+13+16])
 		}
 	}
 	if fdebug {
