@@ -118,22 +118,23 @@ func main() {
 	getGroupsInfo()
 
 	for i, grp := range ggGroups {
-		log.Printf("Getting info for group %s\n", grp.GroupName)
-
 		ggGroups[i].GroupLastStart = getSingleGroupInfo(grp.GroupName)
 
 		prevLastStart, prevStatus := getLastGroupInfo(grp.GroupName)
 
 		if grp.GroupStatus == string("RUNNING") && (prevLastStart != ggGroups[i].GroupLastStart || prevStatus != grp.GroupStatus) {
-			out := execCmd(ggsciBinary, "view report "+grp.GroupName)
+			log.Printf("Getting MAPs for group %s\n", grp.GroupName)
+			out := execCmd(ggsciBinary, "view params "+grp.GroupName)
 			if grp.GroupType == string("REPLICAT") {
-				ggGroups[i].GroupMaps, ggGroups[i].GroupDB = processReport(out)
+				ggGroups[i].GroupMaps, ggGroups[i].GroupDB = processParams(out)
 
 				if ggGroups[i].GroupDB == "" || len(ggGroups[i].GroupMaps) == 0 /* защита от пустого отчета, когда иногда в отчет не попадают MAP директивы */ {
 					continue // Пропускаем этап вставки в БД, если БД для группы не указана
 				}
 				updateDB(ggGroups[i])
 			}
+		} else {
+			log.Println("Skipping.. no status changes since last start")
 		}
 	}
 
@@ -168,7 +169,8 @@ func loadGroupsLastStatus() {
 
 	err = json.Unmarshal(fileBytes, &groupsLastStatus)
 	if err != nil {
-		log.Fatal("Error parsing config", err)
+		log.Println("Error parsing config: ", err)
+		groupsLastStatus = make([]ggGroupsLastStatus, 0, 10)
 	}
 	if fdebug {
 		log.Println("Loaded Last Status data from " + configGroups)
@@ -176,7 +178,6 @@ func loadGroupsLastStatus() {
 	}
 }
 
-//prevLastStart, prevStatus := getAndUpdateLastGroupInfo(ggsciBinary, grp.GroupName, ggGroups[i].GroupLastStart, grp.GroupStatus)
 func getLastGroupInfo(grName string) (string, string) {
 	var prevStart, prevStatus string
 	for _, grs := range groupsLastStatus {
@@ -195,7 +196,7 @@ func getLastGroupInfo(grName string) (string, string) {
 }
 
 func saveGroupsLastStatus() {
-	var grCurrSt []groupLastStartAndStatus
+	grCurrSt := make([]groupLastStartAndStatus, 0, 10)
 	for i := range ggGroups {
 		grCurrSt = append(grCurrSt, groupLastStartAndStatus{ggGroups[i].GroupName, ggGroups[i].GroupLastStart, ggGroups[i].GroupStatus})
 	}
@@ -234,12 +235,12 @@ func saveGroupsLastStatus() {
 
 func getGroupsInfo() {
 	log.Println("Getting all groups info")
+	ggGroups = make([]gGroup, 0, 10)
 
 	out := execCmd(ggsciBinary, "info all")
 	if fdebug {
 		log.Printf("Got %d bytes\n", out.Len())
 	}
-	ggGroups = make([]gGroup, 1)
 	lines := bytes.Split(out.Bytes(), []byte("\n"))
 	var ggGroup gGroup
 	for _, line := range lines {
@@ -291,12 +292,13 @@ func getCredStoreInfo() {
 	var currAlias string
 	for _, line := range lines {
 		// fmt.Printf("%s\n", line)
-		if bytes.Contains(line, []byte("Alias:")) {
-			currAlias = strings.ToUpper(string(bytes.TrimLeft(bytes.TrimSpace(line), string("Alias: "))))
+		if pos := bytes.Index(line, []byte("Alias:")); pos != -1 {
+			currAlias = string(bytes.ToUpper(bytes.TrimSpace(line[pos+7:])))
 			continue
 		}
 		if currAlias != "" {
-			aliases[currAlias] = strings.ToUpper(string(bytes.TrimLeft(bytes.TrimSpace(line), string("Userid: "))))
+			pos := bytes.Index(line, []byte("Userid:"))
+			aliases[currAlias] = string(bytes.ToUpper(bytes.TrimSpace(line[pos+8:])))
 			currAlias = ""
 		}
 	}
@@ -334,7 +336,7 @@ func processReport(report bytes.Buffer) (map[string]repTable, string) {
 	lines := bytes.Split(report.Bytes(), []byte("\n"))
 	re := regexp.MustCompile(`(?i)^map[[:space:]]+([[:alnum:]_$]+)\.([[:alnum:]_$\?\*\-]+)[[:space:]]*,{0,1}[[:space:]]*target[[:space:]]+([[:alnum:]_$]+)\.([[:alnum:]_$\?\*\-]+)[[:space:]]*,{0,1}[[:space:]]*([^;]*)`)
 
-	repTables := make(map[string]repTable)
+	repTables := make(map[string]repTable, 10)
 	var groupDB string
 	var linesFile int
 	var linesMatched int
@@ -354,11 +356,12 @@ func processReport(report bytes.Buffer) (map[string]repTable, string) {
 			linesMatched++
 		}
 
+		upperLine := bytes.ToUpper(line)
 		// Получаем tns базы данных, с которой работает процесс
-		if bytes.Contains(bytes.ToUpper(line), []byte("USERID")) {
-			authLine := bytes.ToUpper(line)
+		if authLine := bytes.TrimSpace(upperLine); bytes.Contains(authLine, []byte("USERID")) {
 			if bytes.Contains(authLine, []byte("USERIDALIAS")) {
-				alias := string(bytes.TrimSpace(bytes.TrimLeft(bytes.TrimSpace(authLine), string("USERIDALIAS"))))
+				alias := string(bytes.TrimSpace(authLine[12:]))
+				// alias := string(bytes.TrimSpace(bytes.TrimLeft(bytes.TrimSpace(authLine), string("USERIDALIAS"))))
 				dbconn, ok := aliases[alias]
 				if !ok {
 					log.Fatalln("Unable to find record for " + alias + " in credentialstore map")
@@ -387,13 +390,96 @@ func processReport(report bytes.Buffer) (map[string]repTable, string) {
 	return repTables, groupDB
 }
 
+func processParams(data bytes.Buffer) (map[string]repTable, string) {
+
+	lines := bytes.Split(data.Bytes(), []byte("\n"))
+	re := regexp.MustCompile(`(?i)^map[[:space:]]+([[:alnum:]_$]+)\.([[:alnum:]_$\?\*\-]+)[[:space:]]*,{0,1}[[:space:]]*target[[:space:]]+([[:alnum:]_$]+)\.([[:alnum:]_$\?\*\-]+)[[:space:]]*,{0,1}[[:space:]]*([^;]*)`)
+
+	repTables := make(map[string]repTable, 10)
+	var groupDB string
+	var linesFile int
+	var linesMatched int
+	for _, line := range lines {
+		trimmedLine := bytes.TrimSpace(line)
+		upperLine := bytes.ToUpper(line)
+		if bytes.Contains(upperLine, []byte("OBEY")) {
+			obeyFileN := string(bytes.TrimSpace(trimmedLine[5:]))
+			// fmt.Println(obeyFileN)
+			if obeyFileN[:2] == "./" {
+				obeyFileN = ggsciBinary[:strings.LastIndex(ggsciBinary, "/")] + obeyFileN[1:]
+			}
+			// fmt.Println(obeyFileN)
+
+			fileBytes, err := ioutil.ReadFile(obeyFileN)
+			if err != nil {
+				log.Fatal("Error reading obey file ", obeyFileN, err)
+			}
+			if fdebug {
+				fmt.Printf("Opened obey file %s\n", obeyFileN)
+			}
+			buff := bytes.NewBuffer(fileBytes)
+			maps, db := processParams(*buff)
+			if db != "" {
+				groupDB = db
+
+			}
+			for k, v := range maps {
+				repTables[k] = v
+			}
+		}
+
+		// Ищем предложения MAP OWNER.NAME TARGET OWNER.NAME [params];
+		// fmt.Printf("%d: %s", i, line)
+		matches := re.FindSubmatch(trimmedLine)
+		linesFile++
+		if len(matches) > 0 {
+			// fmt.Printf("%q\n", matches)
+			if fdebug {
+				fmt.Printf("\t%s.%s >> %s.%s, tail: %s\n", matches[1], matches[2], matches[3], matches[4], matches[5])
+			}
+			repTables[strings.ToUpper(string(matches[3]))+"."+strings.ToUpper(string(matches[4]))] = repTable{matches[1], matches[2], matches[3], matches[4], matches[5]}
+			// str := string(matches[3]) + "." + string(matches[4])
+			// fmt.Printf("\t%s\n", str)
+			linesMatched++
+		}
+
+		// Получаем tns базы данных, с которой работает процесс
+		if authLine := bytes.TrimSpace(upperLine); bytes.Contains(authLine, []byte("USERID")) {
+			if bytes.Contains(authLine, []byte("USERIDALIAS")) {
+				alias := string(bytes.TrimSpace(authLine[12:]))
+				// alias := string(bytes.TrimSpace(bytes.TrimLeft(bytes.TrimSpace(authLine), string("USERIDALIAS"))))
+				dbconn, ok := aliases[alias]
+				if !ok {
+					log.Fatalln("Unable to find record for " + alias + " in credentialstore map")
+				}
+				groupDB = strings.Split(dbconn, string("@"))[1]
+			} else { // USERID type of auth
+
+				useridRE := regexp.MustCompile(`(?i)USERID.+@([[:alnum:]_$]+).+`)
+				matches = useridRE.FindSubmatch(authLine)
+				groupDB = string(matches[1])
+			}
+			if fdebug {
+				log.Printf("Group DB is %s\n", groupDB)
+			}
+		}
+
+	}
+
+	if fdebug {
+		fmt.Printf("\n%d lines in file\n%d lines matched\n", linesFile, linesMatched)
+	}
+	log.Printf("%d tables in map\n", len(repTables))
+	return repTables, groupDB
+}
+
 func updateDB(group gGroup) {
 	_, ok := dbConns[group.GroupDB]
 	if !ok {
 		var dbcred string
 		switch group.GroupDB {
 		case "REPDB_GG":
-			dbcred = "fe_gg/**@repdb"
+			dbcred = "fe_gg/hw8mpv2vt@repdb"
 		case "STATDB":
 			dbcred = "ggate/**@statdb"
 		case "UAT":
