@@ -128,7 +128,7 @@ func main() {
 			if grp.GroupType == string("REPLICAT") {
 				ggGroups[i].GroupMaps, ggGroups[i].GroupDB = processParams(out)
 
-				if ggGroups[i].GroupDB == "" || len(ggGroups[i].GroupMaps) == 0 /* защита от пустого отчета, когда иногда в отчет не попадают MAP директивы */ {
+				if ggGroups[i].GroupDB == "" {
 					continue // Пропускаем этап вставки в БД, если БД для группы не указана
 				}
 				updateDB(ggGroups[i])
@@ -418,6 +418,10 @@ func processParams(data bytes.Buffer) (map[string]repTable, string) {
 	for _, line := range lines {
 		trimmedLine := bytes.TrimSpace(line)
 		upperLine := bytes.ToUpper(line)
+		if len(trimmedLine) > 1 && string(trimmedLine[:2]) == "--" { // Строки, начинающие с комментария просто пропускаем
+			continue
+		}
+
 		if bytes.Contains(upperLine, []byte("OBEY")) {
 			obeyFileN := string(bytes.TrimSpace(trimmedLine[5:]))
 			// fmt.Println(obeyFileN)
@@ -519,7 +523,8 @@ func updateDB(group gGroup) {
 		case "GG_UR":
 			dbcred = "ggate/**@dwx"
 		default:
-			log.Fatalln("No credentials for group DB specified: " + group.GroupDB)
+			log.Println("No credentials for group DB specified: " + group.GroupDB + ". Skipping DB update")
+			return
 		}
 
 		db, err := sql.Open("goracle", dbcred)
