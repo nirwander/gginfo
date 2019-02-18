@@ -134,7 +134,7 @@ func main() {
 				updateDB(ggGroups[i])
 			}
 		} else {
-			log.Println("Skipping.. no status changes since last start")
+			log.Printf("Skipping %s.. no status changes since last start\n", grp.GroupName)
 		}
 	}
 
@@ -160,11 +160,27 @@ func loadGroupsLastStatus() {
 	if err != nil {
 		panic(err)
 	}
-	exPath := filepath.Dir(ex)
+	// exPath := filepath.Dir(ex)
+	confPath := filepath.Dir(ex) + "/" + configGroups
 
-	fileBytes, err := ioutil.ReadFile(exPath + "/" + configGroups)
+	// detect if file exists
+	var _, pathErr = os.Stat(confPath)
+
+	// create file if not exists
+	if os.IsNotExist(pathErr) {
+		if fdebug {
+			log.Println("Couldn't find config file " + configGroups + ". Creating one...")
+		}
+		file, err := os.Create(confPath)
+		if err != nil {
+			log.Fatal("Error creating config file: " + confPath)
+		}
+		file.Close()
+	}
+
+	fileBytes, err := ioutil.ReadFile(confPath)
 	if err != nil {
-		log.Fatal("Error reading config file - expecting", exPath+"/"+configGroups, err)
+		log.Fatal("Error reading config file - expecting", confPath, err)
 	}
 
 	err = json.Unmarshal(fileBytes, &groupsLastStatus)
@@ -220,7 +236,7 @@ func saveGroupsLastStatus() {
 	}
 	exPath := filepath.Dir(ex)
 
-	json, err := json.Marshal(&groupsLastStatus)
+	json, err := json.MarshalIndent(&groupsLastStatus, "", "   ")
 	if err != nil {
 		log.Fatal("Error making json ", err)
 	}
@@ -479,7 +495,7 @@ func updateDB(group gGroup) {
 		var dbcred string
 		switch group.GroupDB {
 		case "REPDB_GG":
-			dbcred = "fe_gg/hw8mpv2vt@repdb"
+			dbcred = "fe_gg/**@repdb"
 		case "STATDB":
 			dbcred = "ggate/**@statdb"
 		case "UAT":
