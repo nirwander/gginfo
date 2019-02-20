@@ -427,8 +427,9 @@ func processParams(data bytes.Buffer) (map[string]repTable, string) {
 			// fmt.Println(obeyFileN)
 			if obeyFileN[:2] == "./" {
 				obeyFileN = ggsciBinary[:strings.LastIndex(ggsciBinary, "/")] + obeyFileN[1:]
+			} else if obeyFileN[:1] != "/" {
+				obeyFileN = ggsciBinary[:strings.LastIndex(ggsciBinary, "/")+1] + obeyFileN
 			}
-			// fmt.Println(obeyFileN)
 
 			fileBytes, err := ioutil.ReadFile(obeyFileN)
 			if err != nil {
@@ -483,7 +484,6 @@ func processParams(data bytes.Buffer) (map[string]repTable, string) {
 				log.Printf("Group DB is %s\n", groupDB)
 			}
 		}
-
 	}
 
 	if fdebug {
