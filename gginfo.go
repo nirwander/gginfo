@@ -108,8 +108,8 @@ type ggGroupsLastStatus struct {
 
 var groupsLastStatus []ggGroupsLastStatus
 
-// key for enc function
-var key []byte
+// seckey for enc function
+var seckey []byte
 
 func init() {
 	const (
@@ -123,7 +123,7 @@ func init() {
 	flag.BoolVar(&fdebug, "debug", defaultDebug, debugUsage)
 	flag.StringVar(&ggsciBinary, "ggsci", defaultGgsci, ggsciUsage)
 	flag.BoolVar(&fencrypt, "encrypt", defaultFencrypt, fencryptUsage)
-	key = []byte("a very very very very secret key") // 32 bytes
+	seckey = []byte("a very very very very secret key") // 32 bytes
 }
 
 func main() {
@@ -137,9 +137,9 @@ func main() {
 			log.Fatalln("when using encrypt flag there should be only one argument that is password to encrypt")
 		}
 		pwd := os.Args[1]
-		encPwd, err := encrypt(key, []byte(pwd))
+		encPwd, err := encrypt(seckey, []byte(pwd))
 		if err != nil {
-			log.Fatalln("Error encrypting text: " + pwd)
+			log.Fatalln("Error encrypting text: " + pwd + "; " + err.Error())
 		}
 		fmt.Println(encPwd)
 		return
@@ -586,33 +586,38 @@ func processParams(data bytes.Buffer) (map[string]repTable, string) {
 func updateDB(group gGroup) {
 	_, ok := dbConns[group.GroupDB]
 	if !ok {
-		var dbcred string
-		switch group.GroupDB {
-		case "REPDB_GG":
-			dbcred = "fe_gg/**@repdb"
-		case "STATDB":
-			dbcred = "ggate/**@statdb"
-		case "UAT":
-			dbcred = "ggate/**@uat"
-		case "DEV":
-			dbcred = "ggate/**@dev"
-		case "GG_STF":
-			dbcred = "ggate/**@dwx"
-		case "GG_KV":
-			dbcred = "ggate/**@dwx"
-		case "GG_FE":
-			dbcred = "ggate/**@dwx"
-		case "GG_NW":
-			dbcred = "ggate/**@dwx"
-		case "GG_GFM":
-			dbcred = "ggate/**@dwx"
-		case "GG_SF":
-			dbcred = "ggate/**@dwx"
-		case "GG_PF":
-			dbcred = "ggate/**@dwx"
-		case "GG_UR":
-			dbcred = "ggate/**@dwx"
-		default:
+		// var dbcred string
+		// switch group.GroupDB {
+		// case "REPDB_GG":
+		// 	dbcred = "fe_gg/**@repdb"
+		// case "STATDB":
+		// 	dbcred = "ggate/**@statdb"
+		// case "UAT":
+		// 	dbcred = "ggate/**@uat"
+		// case "DEV":
+		// 	dbcred = "ggate/**@dev"
+		// case "GG_STF":
+		// 	dbcred = "ggate/**@dwx"
+		// case "GG_KV":
+		// 	dbcred = "ggate/**@dwx"
+		// case "GG_FE":
+		// 	dbcred = "ggate/**@dwx"
+		// case "GG_NW":
+		// 	dbcred = "ggate/**@dwx"
+		// case "GG_GFM":
+		// 	dbcred = "ggate/**@dwx"
+		// case "GG_SF":
+		// 	dbcred = "ggate/**@dwx"
+		// case "GG_PF":
+		// 	dbcred = "ggate/**@dwx"
+		// case "GG_UR":
+		// 	dbcred = "ggate/**@dwx"
+		// default:
+		// 	log.Println("No credentials for group DB specified: " + group.GroupDB + ". Skipping DB update")
+		// 	return
+		// }
+		dbcred := getDbCredByTns(group.GroupDB)
+		if dbcred == "" {
 			log.Println("No credentials for group DB specified: " + group.GroupDB + ". Skipping DB update")
 			return
 		}
@@ -757,8 +762,8 @@ func decrypt(key, text []byte) ([]byte, error) {
 
 func getDbCredByTns(tns string) string {
 	for _, val := range ConfigCreds {
-		if val.DbTNS == tns {
-			decPwd, err := decrypt(key, []byte(val.EncPassword))
+		if strings.ToUpper(val.DbTNS) == tns {
+			decPwd, err := decrypt(seckey, []byte(val.EncPassword))
 			if err != nil {
 				log.Fatalln("Error decrypting password: " + err.Error())
 			}
