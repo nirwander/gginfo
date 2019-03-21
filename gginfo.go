@@ -2,10 +2,16 @@ package main
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"os"
@@ -46,10 +52,12 @@ ext_params varchar2(2000)
 on commit preserve rows;
 */
 
-const configGroups = `groups.json`
+const configGroupsFile = `groups.json`
+const configCredFile = `cred.json`
 
 // cmd flags
 var fdebug bool
+var fencrypt bool
 var ggsciBinary string
 
 var aliases map[string]string
@@ -76,6 +84,16 @@ type gGroup struct {
 
 var ggGroups []gGroup
 
+// Структура для хранения данных подключения к БД, получаемых из json файла
+type configCred struct {
+	DbTNS       string `json:"tns"`
+	Username    string `json:"username"`
+	EncPassword string `json:"encr_password"`
+}
+
+// ConfigCreds - данные для подключения к БД
+var ConfigCreds []configCred
+
 // Структуры для хранения статуса и даты крайнего запуска группы
 type groupLastStartAndStatus struct {
 	GroupName  string `json:"groupName"`
@@ -90,15 +108,22 @@ type ggGroupsLastStatus struct {
 
 var groupsLastStatus []ggGroupsLastStatus
 
+// key for enc function
+var key []byte
+
 func init() {
 	const (
-		defaultDebug = false
-		debugUsage   = "set debug=true to get output data in StdOut (and additional info) instead of sending to DB"
-		defaultGgsci = "ggsci"
-		ggsciUsage   = "set full path to ggsci binary"
+		defaultDebug    = false
+		debugUsage      = "set debug=true to get output data in StdOut (and additional info) instead of sending to DB"
+		defaultGgsci    = "ggsci"
+		ggsciUsage      = "set full path to ggsci binary"
+		defaultFencrypt = false
+		fencryptUsage   = "set to perform text encryption from stdin"
 	)
 	flag.BoolVar(&fdebug, "debug", defaultDebug, debugUsage)
 	flag.StringVar(&ggsciBinary, "ggsci", defaultGgsci, ggsciUsage)
+	flag.BoolVar(&fencrypt, "encrypt", defaultFencrypt, fencryptUsage)
+	key = []byte("a very very very very secret key") // 32 bytes
 }
 
 func main() {
@@ -107,11 +132,38 @@ func main() {
 	//Разворачиваем аргументы
 	flag.Parse()
 
+	if fencrypt {
+		if len(os.Args) > 2 {
+			log.Fatalln("when using encrypt flag there should be only one argument that is password to encrypt")
+		}
+		pwd := os.Args[1]
+		encPwd, err := encrypt(key, []byte(pwd))
+		if err != nil {
+			log.Fatalln("Error encrypting text: " + pwd)
+		}
+		fmt.Println(encPwd)
+		return
+	}
 	// processReport(`C:\Users\wander\go\xfecr.txt`)
 	// getConfig()
 	dbConns = make(map[string]*sql.DB)
 
 	loadGroupsLastStatus()
+
+	loadCredentials()
+
+	// plaintext := []byte("some really really really long plaintext")
+	// fmt.Printf("%s\n", plaintext)
+	// ciphertext, err := encrypt(key, plaintext)
+	// if err != nil {
+	//     log.Fatal(err)
+	// }
+	// fmt.Printf("%0x\n", ciphertext)
+	// result, err := decrypt(key, ciphertext)
+	// if err != nil {
+	//     log.Fatal(err)
+	// }
+	// fmt.Printf("%s\n", result)
 
 	getCredStoreInfo()
 
@@ -161,7 +213,7 @@ func loadGroupsLastStatus() {
 		panic(err)
 	}
 	// exPath := filepath.Dir(ex)
-	confPath := filepath.Dir(ex) + "/" + configGroups
+	confPath := filepath.Dir(ex) + "/" + configGroupsFile
 
 	// detect if file exists
 	var _, pathErr = os.Stat(confPath)
@@ -169,11 +221,11 @@ func loadGroupsLastStatus() {
 	// create file if not exists
 	if os.IsNotExist(pathErr) {
 		if fdebug {
-			log.Println("Couldn't find config file " + configGroups + ". Creating one...")
+			log.Println("Couldn't find config file " + configGroupsFile + ". Creating one...")
 		}
 		file, err := os.Create(confPath)
 		if err != nil {
-			log.Fatal("Error creating config file: " + confPath)
+			log.Fatalln("Error creating config file: " + confPath)
 		}
 		file.Close()
 	}
@@ -189,8 +241,47 @@ func loadGroupsLastStatus() {
 		groupsLastStatus = make([]ggGroupsLastStatus, 0, 10)
 	}
 	if fdebug {
-		log.Println("Loaded Last Status data from " + configGroups)
+		log.Println("Loaded Last Status data from " + configGroupsFile)
 		fmt.Println(groupsLastStatus)
+	}
+}
+
+func loadCredentials() {
+	ex, err := os.Executable()
+	if err != nil {
+		panic(err)
+	}
+	// exPath := filepath.Dir(ex)
+	confPath := filepath.Dir(ex) + "/" + configCredFile
+
+	// detect if file exists
+	var _, pathErr = os.Stat(confPath)
+
+	// create file if not exists
+	if os.IsNotExist(pathErr) {
+		if fdebug {
+			log.Println("Couldn't find config file " + configCredFile + ". Creating one...")
+		}
+		file, err := os.Create(confPath)
+		if err != nil {
+			log.Fatal("Error creating config file: " + confPath)
+		}
+		file.Close()
+	}
+
+	fileBytes, err := ioutil.ReadFile(confPath)
+	if err != nil {
+		log.Fatal("Error reading config file - expecting", confPath, err)
+	}
+
+	err = json.Unmarshal(fileBytes, &ConfigCreds)
+	if err != nil {
+		log.Println("Error parsing config: ", err)
+		ConfigCreds = make([]configCred, 0, 1)
+	}
+	if fdebug {
+		log.Println("Loaded Last Status data from " + configCredFile)
+		fmt.Println(ConfigCreds)
 	}
 }
 
@@ -240,12 +331,12 @@ func saveGroupsLastStatus() {
 	if err != nil {
 		log.Fatal("Error making json ", err)
 	}
-	err = ioutil.WriteFile(exPath+"/"+configGroups, json, 0644)
+	err = ioutil.WriteFile(exPath+"/"+configGroupsFile, json, 0644)
 	if err != nil {
 		log.Fatal("Error writing json ", err)
 	}
 	if fdebug {
-		log.Println("Written Last Status data to " + configGroups)
+		log.Println("Written Last Status data to " + configGroupsFile)
 	}
 }
 
@@ -424,11 +515,10 @@ func processParams(data bytes.Buffer) (map[string]repTable, string) {
 
 		if bytes.Contains(upperLine, []byte("OBEY")) {
 			obeyFileN := string(bytes.TrimSpace(trimmedLine[5:]))
-			// fmt.Println(obeyFileN)
+
 			if obeyFileN[:2] == "./" {
 				obeyFileN = ggsciBinary[:strings.LastIndex(ggsciBinary, "/")] + obeyFileN[1:]
 			}
-			// fmt.Println(obeyFileN)
 
 			fileBytes, err := ioutil.ReadFile(obeyFileN)
 			if err != nil {
@@ -628,4 +718,52 @@ func min(x, y int) int {
 		return x
 	}
 	return y
+}
+
+func encrypt(key, text []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	b := base64.StdEncoding.EncodeToString(text)
+	ciphertext := make([]byte, aes.BlockSize+len(b))
+	iv := ciphertext[:aes.BlockSize]
+	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
+		return nil, err
+	}
+	cfb := cipher.NewCFBEncrypter(block, iv)
+	cfb.XORKeyStream(ciphertext[aes.BlockSize:], []byte(b))
+	return ciphertext, nil
+}
+
+func decrypt(key, text []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	if len(text) < aes.BlockSize {
+		return nil, errors.New("ciphertext too short")
+	}
+	iv := text[:aes.BlockSize]
+	text = text[aes.BlockSize:]
+	cfb := cipher.NewCFBDecrypter(block, iv)
+	cfb.XORKeyStream(text, text)
+	data, err := base64.StdEncoding.DecodeString(string(text))
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func getDbCredByTns(tns string) string {
+	for _, val := range ConfigCreds {
+		if val.DbTNS == tns {
+			decPwd, err := decrypt(key, []byte(val.EncPassword))
+			if err != nil {
+				log.Fatalln("Error decrypting password: " + err.Error())
+			}
+			return val.Username + "/" + string(decPwd) + "@" + val.DbTNS
+		}
+	}
+	return ""
 }
