@@ -139,6 +139,8 @@ func main() {
 	start := time.Now()
 	//Разворачиваем аргументы
 	flag.Parse()
+	part2 := []byte("some secret pic")
+	seckey = append(seckey, part2...)
 
 	if fencrypt {
 		// for i,val := range os.Args {
@@ -166,8 +168,8 @@ func main() {
 	loadGroupsLastStatus()
 
 	loadCredentials()
-	part2 := []byte("some secret pic")
-	seckey = append(seckey, part2...)
+	// fmt.Println(seckey)
+	// fmt.Println(len(seckey))
 
 	getCredStoreInfo()
 
