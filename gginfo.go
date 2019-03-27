@@ -149,6 +149,10 @@ func main() {
 			log.Fatalln("when using encrypt flag there should be only one argument that is password to encrypt")
 		}
 		pwd := os.Args[2]
+		if len(os.Args) > 2 {
+			log.Fatalln("when using encrypt flag there should be only one argument that is password to encrypt")
+		}
+		pwd := os.Args[1]
 		encPwd, err := encrypt(seckey, []byte(pwd))
 		if err != nil {
 			log.Fatalln("Error encrypting text: " + pwd + "; " + err.Error())
@@ -296,6 +300,7 @@ func loadCredentials() {
 	}
 	if fdebug {
 		log.Println("Loaded credentials data from " + configCredFile)
+		log.Println("Loaded Last Status data from " + configCredFile)
 		fmt.Println(ConfigCreds)
 	}
 }
@@ -530,7 +535,7 @@ func processParams(data bytes.Buffer) (map[string]repTable, string) {
 
 		if bytes.Contains(upperLine, []byte("OBEY")) {
 			obeyFileN := string(bytes.TrimSpace(trimmedLine[5:]))
-			// fmt.Println(obeyFileN)
+
 			if obeyFileN[:2] == "./" {
 				obeyFileN = ggsciBinary[:strings.LastIndex(ggsciBinary, "/")] + obeyFileN[1:]
 			} else if obeyFileN[:1] != "/" {

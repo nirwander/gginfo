@@ -1,0 +1,12 @@
+[
+    {
+    "tns":"repdb",
+    "username":"ggate",
+	"encr_password":"dsfsdlfsldfmsdfsdf"
+    },
+    {
+    "tns":"statdb",
+    "username":"ggate",
+	"encr_password":"dsfsdlfsldfmsdfsdf"
+	}
+]
