@@ -25,6 +25,10 @@ import (
 	_ "gopkg.in/goracle.v2"
 )
 
+// Таблицы в СУБД, необходимые для работы.
+// replicated_tables - наполняется данными по репликатам
+// tmp_replicated_tables - временная таблица для упрощения DML и уменьшения количества транзакций
+
 /*
 create table replicated_tables
 (
@@ -52,7 +56,17 @@ ext_params varchar2(2000)
 on commit preserve rows;
 */
 
+// Автоматически создаваемый файл для хранения информации о статусе процессов с крайнего запуска
 const configGroupsFile = `groups.json`
+
+// Вручную создаваемый файл для хранения данных о подключении к БД. Структура:
+// [
+// 	{
+// 		"tns":"repdb"
+// 		"username":"fe_gg"
+// 		"encr_password":"***" << вывод работы программы с флагом -encrypt
+// 	}
+// ]
 const configCredFile = `cred.json`
 
 // cmd flags
@@ -62,6 +76,24 @@ var ggsciBinary string
 
 var aliases map[string]string
 var dbConns map[string]*sql.DB
+
+// Структура для хранения данных подключения к БД, получаемых из json файла
+type configCred struct {
+	DbTNS       string `json:"tns"`
+	Username    string `json:"username"`
+	EncPassword string `json:"encr_password"`
+}
+
+// Структуры для хранения статуса и даты крайнего запуска группы
+type groupLastStartAndStatus struct {
+	GroupName  string `json:"groupName"`
+	LastStart  string `json:"lastStart"`
+	LastStatus string `json:"lastStatus"`
+}
+type ggGroupsLastStatus struct {
+	Ggsci  string                    `json:"ggsci"`
+	Groups []groupLastStartAndStatus `json:"groups"`
+}
 
 // Структура для хранения MAP statement
 type repTable struct {
@@ -84,36 +116,8 @@ type gGroup struct {
 
 var ggGroups []gGroup
 
-// Структура для хранения данных подключения к БД, получаемых из json файла
-type configCred struct {
-	DbTNS       string `json:"tns"`
-	Username    string `json:"username"`
-	EncPassword string `json:"encr_password"`
-}
-
-// [
-// 	{
-// 		"tns":"repdb"
-// 		"username":"fe_gg"
-// 		"encr_password":"***"
-// 	}
-// ]
-
 // ConfigCreds - данные для подключения к БД
 var ConfigCreds []configCred
-
-// Структуры для хранения статуса и даты крайнего запуска группы
-type groupLastStartAndStatus struct {
-	GroupName  string `json:"groupName"`
-	LastStart  string `json:"lastStart"`
-	LastStatus string `json:"lastStatus"`
-}
-
-type ggGroupsLastStatus struct {
-	Ggsci  string                    `json:"ggsci"`
-	Groups []groupLastStartAndStatus `json:"groups"`
-}
-
 var groupsLastStatus []ggGroupsLastStatus
 
 // seckey for enc function
@@ -126,7 +130,7 @@ func init() {
 		defaultGgsci    = "ggsci"
 		ggsciUsage      = "set full path to ggsci binary"
 		defaultFencrypt = false
-		fencryptUsage   = "set to perform text encryption from stdin"
+		fencryptUsage   = "set to perform text encryption from stdin. Use: -encrypt password-plain-text - don't use quotes"
 	)
 	flag.BoolVar(&fdebug, "debug", defaultDebug, debugUsage)
 	flag.StringVar(&ggsciBinary, "ggsci", defaultGgsci, ggsciUsage)
@@ -139,14 +143,12 @@ func main() {
 	start := time.Now()
 	//Разворачиваем аргументы
 	flag.Parse()
+	// Немного security through obscurity
 	part2 := []byte("some secret pic")
 	seckey = append(seckey, part2...)
+	seckey[30] = seckey[30] + 2
 
 	if fencrypt {
-		// for i,val := range os.Args {
-		// 	fmt.Printf("%d: %s", i, val)
-		// }
-		// return
 		if len(os.Args) > 3 {
 			log.Fatalln("when using encrypt flag there should be only one argument that is password to encrypt")
 		}
@@ -156,20 +158,14 @@ func main() {
 			log.Fatalln("Error encrypting text: " + pwd + "; " + err.Error())
 		}
 		fmt.Println(encPwd)
-		// fmt.Println("decrypt:")
-		// fmt.Println(decrypt(seckey, encPwd))
-		// fmt.Println("Ok")
 		return
 	}
-	// processReport(`C:\Users\wander\go\xfecr.txt`)
-	// getConfig()
+
 	dbConns = make(map[string]*sql.DB)
 
 	loadGroupsLastStatus()
 
 	loadCredentials()
-	// fmt.Println(seckey)
-	// fmt.Println(len(seckey))
 
 	getCredStoreInfo()
 
@@ -202,12 +198,6 @@ func main() {
 		}
 	}()
 
-	// var cnt int64
-	// err := db.QueryRow("select count(*) from replicated_tables").Scan(&cnt)
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
-	// fmt.Printf("Table records count: %v\n", cnt)
 	saveGroupsLastStatus()
 
 	fmt.Printf("\n%s time spent\n", time.Since(start))
@@ -314,7 +304,7 @@ func saveGroupsLastStatus() {
 		grCurrSt = append(grCurrSt, groupLastStartAndStatus{ggGroups[i].GroupName, ggGroups[i].GroupLastStart, ggGroups[i].GroupStatus})
 	}
 
-	// Для текущего рабочего бинарника заменяем старые статусы на текущие полностью
+	// Для текущего рабочего бинарника заменяем все старые статусы на актуальные
 	isSet := false
 	for i, ls := range groupsLastStatus {
 		if ls.Ggsci == ggsciBinary {
@@ -357,7 +347,6 @@ func getGroupsInfo() {
 	lines := bytes.Split(out.Bytes(), []byte("\n"))
 	var ggGroup gGroup
 	for _, line := range lines {
-		// fmt.Printf("%s\n", line)
 		if bytes.Contains(line, []byte("EXTRACT")) || bytes.Contains(line, []byte("REPLICAT")) {
 			props := bytes.Fields(line)
 			ggGroup.GroupType = string(props[0])
@@ -404,7 +393,6 @@ func getCredStoreInfo() {
 	aliases = make(map[string]string)
 	var currAlias string
 	for _, line := range lines {
-		// fmt.Printf("%s\n", line)
 		if pos := bytes.Index(line, []byte("Alias:")); pos != -1 {
 			currAlias = string(bytes.ToUpper(bytes.TrimSpace(line[pos+7:])))
 			continue
@@ -424,7 +412,6 @@ func execCmd(ggsciBinary string, cmdText string) bytes.Buffer {
 	var out bytes.Buffer
 
 	cmd := exec.Command(ggsciBinary)
-	// cmd.Stdin = bytes.NewBuffer([]byte("info all"))
 	cmd.Stdin = bytes.NewBuffer([]byte(cmdText))
 	cmd.Stdout = &out
 
@@ -455,17 +442,13 @@ func processReport(report bytes.Buffer) (map[string]repTable, string) {
 	var linesMatched int
 	for _, line := range lines {
 		// Ищем предложения MAP OWNER.NAME TARGET OWNER.NAME [params];
-		// fmt.Printf("%d: %s", i, line)
 		matches := re.FindSubmatch(line)
 		linesFile++
 		if len(matches) > 0 {
-			// fmt.Printf("%q\n", matches)
 			if fdebug {
 				fmt.Printf("\t%s.%s >> %s.%s, tail: %s\n", matches[1], matches[2], matches[3], matches[4], matches[5])
 			}
 			repTables[strings.ToUpper(string(matches[3]))+"."+strings.ToUpper(string(matches[4]))] = repTable{matches[1], matches[2], matches[3], matches[4], matches[5]}
-			// str := string(matches[3]) + "." + string(matches[4])
-			// fmt.Printf("\t%s\n", str)
 			linesMatched++
 		}
 
@@ -474,7 +457,6 @@ func processReport(report bytes.Buffer) (map[string]repTable, string) {
 		if authLine := bytes.TrimSpace(upperLine); bytes.Contains(authLine, []byte("USERID")) {
 			if bytes.Contains(authLine, []byte("USERIDALIAS")) {
 				alias := string(bytes.TrimSpace(authLine[12:]))
-				// alias := string(bytes.TrimSpace(bytes.TrimLeft(bytes.TrimSpace(authLine), string("USERIDALIAS"))))
 				dbconn, ok := aliases[alias]
 				if !ok {
 					log.Fatalln("Unable to find record for " + alias + " in credentialstore map")
@@ -519,9 +501,9 @@ func processParams(data bytes.Buffer) (map[string]repTable, string) {
 			continue
 		}
 
+		// Рекурсивная обработка директивы obey
 		if bytes.Contains(upperLine, []byte("OBEY")) {
 			obeyFileN := string(bytes.TrimSpace(trimmedLine[5:]))
-			// fmt.Println(obeyFileN)
 			if obeyFileN[:2] == "./" {
 				obeyFileN = ggsciBinary[:strings.LastIndex(ggsciBinary, "/")] + obeyFileN[1:]
 			} else if obeyFileN[:1] != "/" {
@@ -547,17 +529,13 @@ func processParams(data bytes.Buffer) (map[string]repTable, string) {
 		}
 
 		// Ищем предложения MAP OWNER.NAME TARGET OWNER.NAME [params];
-		// fmt.Printf("%d: %s", i, line)
 		matches := re.FindSubmatch(trimmedLine)
 		linesFile++
 		if len(matches) > 0 {
-			// fmt.Printf("%q\n", matches)
 			if fdebug {
 				fmt.Printf("\t%s.%s >> %s.%s, tail: %s\n", matches[1], matches[2], matches[3], matches[4], matches[5])
 			}
 			repTables[strings.ToUpper(string(matches[3]))+"."+strings.ToUpper(string(matches[4]))] = repTable{matches[1], matches[2], matches[3], matches[4], matches[5]}
-			// str := string(matches[3]) + "." + string(matches[4])
-			// fmt.Printf("\t%s\n", str)
 			linesMatched++
 		}
 
@@ -565,7 +543,6 @@ func processParams(data bytes.Buffer) (map[string]repTable, string) {
 		if authLine := bytes.TrimSpace(upperLine); bytes.Contains(authLine, []byte("USERID")) {
 			if bytes.Contains(authLine, []byte("USERIDALIAS")) {
 				alias := string(bytes.TrimSpace(authLine[12:]))
-				// alias := string(bytes.TrimSpace(bytes.TrimLeft(bytes.TrimSpace(authLine), string("USERIDALIAS"))))
 				dbconn, ok := aliases[alias]
 				if !ok {
 					log.Fatalln("Unable to find record for " + alias + " in credentialstore map")
@@ -594,36 +571,6 @@ func processParams(data bytes.Buffer) (map[string]repTable, string) {
 func updateDB(group gGroup) {
 	_, ok := dbConns[group.GroupDB]
 	if !ok {
-		// var dbcred string
-		// switch group.GroupDB {
-		// case "REPDB_GG":
-		// 	dbcred = "fe_gg/**@repdb"
-		// case "STATDB":
-		// 	dbcred = "ggate/**@statdb"
-		// case "UAT":
-		// 	dbcred = "ggate/**@uat"
-		// case "DEV":
-		// 	dbcred = "ggate/**@dev"
-		// case "GG_STF":
-		// 	dbcred = "ggate/**@dwx"
-		// case "GG_KV":
-		// 	dbcred = "ggate/**@dwx"
-		// case "GG_FE":
-		// 	dbcred = "ggate/**@dwx"
-		// case "GG_NW":
-		// 	dbcred = "ggate/**@dwx"
-		// case "GG_GFM":
-		// 	dbcred = "ggate/**@dwx"
-		// case "GG_SF":
-		// 	dbcred = "ggate/**@dwx"
-		// case "GG_PF":
-		// 	dbcred = "ggate/**@dwx"
-		// case "GG_UR":
-		// 	dbcred = "ggate/**@dwx"
-		// default:
-		// 	log.Println("No credentials for group DB specified: " + group.GroupDB + ". Skipping DB update")
-		// 	return
-		// }
 		dbcred := getDbCredByTns(group.GroupDB)
 		if dbcred == "" {
 			log.Println("No credentials for group DB specified: " + group.GroupDB + ". Skipping DB update")
@@ -739,7 +686,7 @@ func encrypt(key, text []byte) (string, error) {
 		return "", err
 	}
 	b := base64.StdEncoding.EncodeToString(text)
-	// log.Println(b)
+
 	ciphertext := make([]byte, aes.BlockSize+len(b))
 	iv := ciphertext[:aes.BlockSize]
 	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
