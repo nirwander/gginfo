@@ -171,7 +171,11 @@ func main() {
 
 	getGroupsInfo()
 
+	// cleanRepTablesDB()
+
 	for i, grp := range ggGroups {
+		log.Printf("----------------------------------------------------\n")
+
 		ggGroups[i].GroupLastStart = getSingleGroupInfo(grp.GroupName)
 
 		prevLastStart, prevStatus := getLastGroupInfo(grp.GroupName)
@@ -615,29 +619,6 @@ func updateDB(group gGroup) {
 	if err != nil {
 		log.Println("Error closing statement: " + err.Error())
 	}
-	stmt, err = tx.Prepare(`insert into replicated_tables 
-	select group_name, group_type, src_table_owner, src_table_name, trg_table_owner, trg_table_name, ext_params, sysdate as ins_date
-	from tmp_replicated_tables t
-	where not exists (select * from replicated_tables r where r.group_name = t.group_name 
-																	and r.src_table_owner = t.src_table_owner 
-																	and r.src_table_name = t.src_table_name 
-																	and r.trg_table_owner = t.trg_table_owner 
-																	and r.trg_table_name = t.trg_table_name )
-	and exists (select * from dba_tables dt where dt.owner = t.trg_table_owner and dt.table_name = t.trg_table_name)`)
-
-	res, err := stmt.Exec()
-	if err != nil {
-		log.Println("Error inserting row in replicated_tables: " + err.Error())
-	}
-	rowsCnt, err := res.RowsAffected()
-	if err != nil {
-		log.Println("Error getting affected rows:" + err.Error())
-	}
-	log.Println("   Inserted " + strconv.FormatInt(rowsCnt, 10) + " rows into replicated_tables")
-	err = stmt.Close()
-	if err != nil {
-		log.Println("Error closing statement: " + err.Error())
-	}
 
 	stmt, err = tx.Prepare(`delete from replicated_tables t
 	where (not exists (select * from tmp_replicated_tables r where r.group_name = t.group_name 
@@ -648,15 +629,39 @@ func updateDB(group gGroup) {
 	or not exists (select * from dba_tables dt where dt.owner = t.trg_table_owner and dt.table_name = t.trg_table_name))
 	and t.group_name=:gn`)
 
-	res, err = stmt.Exec(group.GroupName)
+	res, err := stmt.Exec(group.GroupName)
 	if err != nil {
 		log.Println("Error deleting row from replicated_tables: " + err.Error())
 	}
-	rowsCnt, err = res.RowsAffected()
+	rowsCnt, err := res.RowsAffected()
 	if err != nil {
 		log.Println("Error getting affected rows: " + err.Error())
 	}
 	log.Println("   Deleted " + strconv.FormatInt(rowsCnt, 10) + " rows from replicated_tables")
+	err = stmt.Close()
+	if err != nil {
+		log.Println("Error closing statement: " + err.Error())
+	}
+
+	stmt, err = tx.Prepare(`insert into replicated_tables 
+	select group_name, group_type, src_table_owner, src_table_name, trg_table_owner, trg_table_name, ext_params, sysdate as ins_date
+	from tmp_replicated_tables t
+	inner join dba_tables dt on (dt.owner = t.trg_table_owner and dt.table_name = t.trg_table_name)
+	where not exists (select * from replicated_tables r where r.group_name = t.group_name 
+													and r.src_table_owner = t.src_table_owner 
+													and r.src_table_name = t.src_table_name 
+													and r.trg_table_owner = t.trg_table_owner 
+													and r.trg_table_name = t.trg_table_name)`)
+
+	res, err = stmt.Exec()
+	if err != nil {
+		log.Println("Error inserting row in replicated_tables: " + err.Error())
+	}
+	rowsCnt, err = res.RowsAffected()
+	if err != nil {
+		log.Println("Error getting affected rows:" + err.Error())
+	}
+	log.Println("   Inserted " + strconv.FormatInt(rowsCnt, 10) + " rows into replicated_tables")
 	err = stmt.Close()
 	if err != nil {
 		log.Println("Error closing statement: " + err.Error())
