@@ -492,7 +492,7 @@ func processReport(report bytes.Buffer) (map[string]repTable, string) {
 func processParams(data bytes.Buffer) (map[string]repTable, string) {
 
 	lines := bytes.Split(data.Bytes(), []byte("\n"))
-	re := regexp.MustCompile(`(?i)^map[[:space:]]+([[:alnum:]_$]+)\.([[:alnum:]_$\?\*\-]+)[[:space:]]*,{0,1}[[:space:]]*target[[:space:]]+([[:alnum:]_$]+)\.([[:alnum:]_$\?\*\-]+)[[:space:]]*,{0,1}[[:space:]]*([^;]*)`)
+	re := regexp.MustCompile(`(?i)^map[[:space:]]+([[:alnum:]_$]+)\."?([[:alnum:]_$\?\*\-]+)"?[[:space:]]*,{0,1}[[:space:]]*target[[:space:]]+([[:alnum:]_$]+)\.([[:alnum:]_$\?\*\-]+)[[:space:]]*,{0,1}[[:space:]]*([^;]*)`)
 
 	repTables := make(map[string]repTable, 10)
 	var groupDB string
